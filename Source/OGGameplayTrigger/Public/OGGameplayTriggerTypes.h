@@ -15,16 +15,17 @@ UENUM(meta = (BitFlags))
 enum class EOGTriggerOperationFlags : uint8
 {
     None                        = 0,
-    AddActiveTrigger            = 1 << 0,
-    TriggerUpdate               = 1 << 1, //Does not represent an operation, but useful for listener filtering
-    ProcessCallbacks            = 1 << 2,
-    NetworkRPC                  = 1 << 3,
-    RemoveActiveTrigger         = 1 << 4,
+    Op_AddActiveTrigger         = 1 << 0,
+    Op_UpdateActiveTrigger      = 1 << 1,
+    Op_ProcessCallbacks         = 1 << 2,
+    Op_NetworkRPC               = 1 << 3,
+    Op_RemoveActiveTrigger      = 1 << 4,
     
-    InstantaneousTrigger        = AddActiveTrigger | ProcessCallbacks | RemoveActiveTrigger,
-    NetworkedInstantaneous      = InstantaneousTrigger | NetworkRPC,
-    OpenTrigger                 = AddActiveTrigger | ProcessCallbacks,
-    CloseTrigger                = ProcessCallbacks | RemoveActiveTrigger
+    InstantaneousTrigger        = Op_AddActiveTrigger | Op_ProcessCallbacks | Op_RemoveActiveTrigger,
+    NetworkedInstantaneous      = InstantaneousTrigger | Op_NetworkRPC,
+    OpenTrigger                 = Op_AddActiveTrigger | Op_ProcessCallbacks,
+    UpdateTrigger               = Op_UpdateActiveTrigger | Op_ProcessCallbacks,
+    CloseTrigger                = Op_ProcessCallbacks | Op_RemoveActiveTrigger
 };
 ENUM_CLASS_FLAGS(EOGTriggerOperationFlags)
 
@@ -32,9 +33,9 @@ UENUM(BlueprintType, meta = (BitFlags, UseEnumValuesAsMaskValuesInEditor = "true
 enum class EOGTriggerListenerPhases : uint8
 {
     None            = 0 UMETA(Hidden),
-    TriggerStart    = EOGTriggerOperationFlags::AddActiveTrigger,
-    TriggerUpdate   = EOGTriggerOperationFlags::TriggerUpdate,
-    TriggerEnd      = EOGTriggerOperationFlags::RemoveActiveTrigger,
+    TriggerStart    = EOGTriggerOperationFlags::Op_AddActiveTrigger,
+    TriggerUpdate   = EOGTriggerOperationFlags::Op_UpdateActiveTrigger,
+    TriggerEnd      = EOGTriggerOperationFlags::Op_RemoveActiveTrigger,
 
     All             = TriggerStart | TriggerUpdate | TriggerEnd UMETA(Hidden)
 };
@@ -60,7 +61,7 @@ struct TStructOpsTypeTraits<FOGTriggerData> : public TStructOpsTypeTraitsBase2<F
     enum
     {
         WithAddStructReferencedObjects = true,
-        WithNetSerializer = true,
+        //WithNetSerializer = true,
         WithNetDeltaSerializer = true,
     };
 };

@@ -61,15 +61,13 @@ class OGGAMEPLAYTRIGGER_API UOGGameplayTriggerSubsystem : public UWorldSubsystem
 		FOGPendingTriggerOperation(const FOGGameplayTriggerHandle& InHandle, const EOGTriggerOperationFlags& InOperation, UOGGameplayTriggerContext* InTriggerContext)
 			: Handle(InHandle), Operation(InOperation)
 		{
-			if (!!(Operation & EOGTriggerOperationFlags::AddActiveTrigger))
-			{
-				NewTriggerContext = TStrongObjectPtr(InTriggerContext);
-			}
+			ensureMsgf(!!(Operation & (EOGTriggerOperationFlags::Op_AddActiveTrigger | EOGTriggerOperationFlags::Op_UpdateActiveTrigger)), TEXT("Only some operations support containing trigger context"));
+			StoredTriggerContext = TStrongObjectPtr(InTriggerContext);
 		}
 
 		FOGGameplayTriggerHandle Handle = FOGHandleBase::EmptyHandle<FOGGameplayTriggerHandle>();
 		EOGTriggerOperationFlags Operation = EOGTriggerOperationFlags::None;
-		TStrongObjectPtr<UOGGameplayTriggerContext> NewTriggerContext = nullptr;
+		TStrongObjectPtr<UOGGameplayTriggerContext> StoredTriggerContext = nullptr;
 	};
 
 	typedef TMap<FOGTriggerListenerHandle, TSharedRef<FOGTriggerListenerData>> ListenerMap;
@@ -111,7 +109,7 @@ public:
 
 	// Update a trigger trigger with 
 	UFUNCTION(BlueprintCallable, Category="GameplayTrigger")
-	void UpdateTrigger(const FOGGameplayTriggerHandle& Handle, const UOGGameplayTriggerContext* UpdatedTriggerContext);
+	void UpdateTrigger(const FOGGameplayTriggerHandle& Handle, UOGGameplayTriggerContext* UpdatedTriggerContext);
 	
 	// End a trigger that was started with StartTrigger
 	UFUNCTION(BlueprintCallable, Category="GameplayTrigger")
@@ -119,6 +117,8 @@ public:
 
 	//Checks if the handle references an active trigger, may not be true immediately after a StartTrigger call if the trigger was placed in the pending operations queue
 	bool IsTriggerActive(const FOGGameplayTriggerHandle& Handle);
+	//Checks if the handle references an active trigger, or a trigger that is pending activation (while not also pending removal)
+	bool IsTriggerActiveOrPending(const FOGGameplayTriggerHandle& Handle);
 	//Checks if the listener referenced by that handle is listening for new trigger events
 	bool IsListenerHandleValid(const FOGTriggerListenerHandle& Handle);
 
@@ -130,8 +130,8 @@ private:
 	FOGTriggerListenerHandle CreateNewListenerHandle(const FGameplayTag& TriggerType);
 	FOGGameplayTriggerHandle CreateNewTriggerHandle(const FGameplayTag& TriggerType);
 
-	void ProcessPendingOperations();
-	void ProcessNextTriggerOperation();
+	void EnqueueAndProcessOperation(const FOGPendingTriggerOperation& Operation);
+	void ProcessTriggerOperation(const FOGPendingTriggerOperation& TriggerOperation);
 	void ProcessTriggerCallbacks(const FOGGameplayTriggerHandle& TriggerHandle, const EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* TriggerContext);
 	
 	//TODO: real system for replicated event types
@@ -141,12 +141,15 @@ private:
 	static bool DoesTriggerPassListenerFilters(EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, const FOGTriggerListenerData* Listener) {return true;}
 	
 	void AddActiveTrigger_Internal(const FOGGameplayTriggerHandle& Handle, UOGGameplayTriggerContext* Trigger);
+	void UpdateActiveTrigger_Internal(const FOGGameplayTriggerHandle& Handle, UOGGameplayTriggerContext* Trigger);
 	void RemoveActiveTrigger_Internal(const FOGGameplayTriggerHandle& Handle);
 
 	void AddTriggerListener_Internal(const FOGTriggerListenerHandle& Handle, const TSharedRef<FOGTriggerListenerData>& Listener);
 	void RemoveTriggerListener_Internal(const FOGTriggerListenerHandle& Handle);
-	
-	bool bIsProcessingTrigger = false;
+
+	void EnqueueOperation(const FOGPendingTriggerOperation& Operation);
+	bool PeekOperation(FOGPendingTriggerOperation& OutOperation) const;
+	void PopOperation();
 	
 	TMap<FGameplayTag, ListenerMap> ListenersByType;
 
@@ -162,6 +165,6 @@ private:
 	 */
 	ListenerMap ListenersPendingAdd;
 	TSet<FOGTriggerListenerHandle> ListenersPendingRemove;
-	
-	TQueue<FOGPendingTriggerOperation> PendingOperations;
+
+	TDoubleLinkedList<FOGPendingTriggerOperation> OperationQueue;
 };

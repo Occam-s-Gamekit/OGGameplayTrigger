@@ -63,19 +63,32 @@ UOGGameplayTriggerContext* UOGGameplayTriggerSubsystem::MakeGameplayTriggerConte
 
 UOGGameplayTriggerContext* UOGGameplayTriggerSubsystem::GetTriggerContextForUpdate(const FOGGameplayTriggerHandle& Handle)
 {
+	
 	if (!Handle.IsValid())
 		return nullptr;
+
+	for (const FOGPendingTriggerOperation& PendingOperation : OperationQueue)
+	{
+		if (Handle != PendingOperation.Handle)
+			continue;
+		if (!ensureMsgf(!(PendingOperation.Operation & EOGTriggerOperationFlags::Op_RemoveActiveTrigger),TEXT("Trying to update a handle that is pending removal")))
+			return nullptr;
+		if (!!(PendingOperation.Operation & (EOGTriggerOperationFlags::Op_AddActiveTrigger | EOGTriggerOperationFlags::Op_UpdateActiveTrigger)))
+		{
+			ensure(PendingOperation.StoredTriggerContext.IsValid());
+			//Deep copy the stored trigger context and return it so the changes don't interfere with pending/current operations
+			return NewObject<UOGGameplayTriggerContext>(this, NAME_None, RF_NoFlags, PendingOperation.StoredTriggerContext.Get());
+		}
+	}
+
 	const TriggerMap* TriggerMap = ActiveTriggersByType.Find(Handle.TriggerType);
-	if (!TriggerMap)
+	if (!ensureMsgf(TriggerMap,TEXT("Could not find active trigger for handle")))
 		return nullptr;
 	const TStrongObjectPtr<UOGGameplayTriggerContext>* ContextPtrPtr = TriggerMap->Find(Handle);
-	if (!ContextPtrPtr || !ContextPtrPtr->IsValid())
+	if (!ensureMsgf(ContextPtrPtr && ContextPtrPtr->IsValid(), TEXT("Could not find active trigger for handle")))
 		return nullptr;
-	
-}
-
-void UOGGameplayTriggerSubsystem::UpdateTrigger(const FOGGameplayTriggerHandle& Handle, const UOGGameplayTriggerContext* UpdatedTriggerContext)
-{
+	//if there is nothing pending on the handle, just return the stored trigger context for in-place modification
+	return ContextPtrPtr->Get();
 }
 
 FOGTriggerListenerHandle UOGGameplayTriggerSubsystem::RegisterTriggerListener(const FGameplayTag& TriggerType, const EOGTriggerListenerPhases Phases,
@@ -139,12 +152,17 @@ FOGGameplayTriggerHandle UOGGameplayTriggerSubsystem::StartTriggerImplicitContex
 	return StartTrigger_Internal(MakeGameplayTriggerContext(TriggerType, TriggerTags, Initiator, Target), EOGTriggerOperationFlags::OpenTrigger);
 }
 
+void UOGGameplayTriggerSubsystem::UpdateTrigger(const FOGGameplayTriggerHandle& Handle, UOGGameplayTriggerContext* UpdatedTriggerContext)
+{
+	const FOGPendingTriggerOperation Operation(Handle, EOGTriggerOperationFlags::UpdateTrigger, UpdatedTriggerContext);
+	EnqueueAndProcessOperation(Operation);
+}
+
 FOGGameplayTriggerHandle UOGGameplayTriggerSubsystem::StartTrigger_Internal(UOGGameplayTriggerContext* TriggerContext, EOGTriggerOperationFlags Operations)
 {
 	FOGGameplayTriggerHandle Handle = CreateNewTriggerHandle(TriggerContext->TriggerType);
 	const FOGPendingTriggerOperation Operation(Handle, Operations, TriggerContext);
-	PendingOperations.Enqueue(Operation);
-	ProcessPendingOperations();
+	EnqueueAndProcessOperation(Operation);
 	return Handle;
 }
 
@@ -167,8 +185,7 @@ FOGGameplayTriggerHandle UOGGameplayTriggerSubsystem::CreateNewTriggerHandle(con
 void UOGGameplayTriggerSubsystem::EndTrigger(const FOGGameplayTriggerHandle& Handle)
 {
 	const FOGPendingTriggerOperation Operation(Handle, EOGTriggerOperationFlags::CloseTrigger);
-	PendingOperations.Enqueue(Operation);
-	ProcessPendingOperations();
+	EnqueueAndProcessOperation(Operation);
 }
 
 bool UOGGameplayTriggerSubsystem::IsTriggerActive(const FOGGameplayTriggerHandle& Handle)
@@ -179,6 +196,22 @@ bool UOGGameplayTriggerSubsystem::IsTriggerActive(const FOGGameplayTriggerHandle
 	if (!TriggerMap)
 		return false;
 	return TriggerMap->Contains(Handle);
+}
+
+bool UOGGameplayTriggerSubsystem::IsTriggerActiveOrPending(const FOGGameplayTriggerHandle& Handle)
+{
+	for (const FOGPendingTriggerOperation& PendingOperation : OperationQueue)
+	{
+		if (Handle != PendingOperation.Handle)
+			continue;
+		if (!!(PendingOperation.Operation & EOGTriggerOperationFlags::Op_RemoveActiveTrigger))
+			return false;
+		if (!!(PendingOperation.Operation & (EOGTriggerOperationFlags::Op_AddActiveTrigger | EOGTriggerOperationFlags::Op_UpdateActiveTrigger)))
+		{
+			return true;
+		}
+	}
+	return IsTriggerActive(Handle);
 }
 
 bool UOGGameplayTriggerSubsystem::IsListenerHandleValid(const FOGTriggerListenerHandle& Handle)
@@ -197,18 +230,15 @@ bool UOGGameplayTriggerSubsystem::IsListenerHandleValid(const FOGTriggerListener
 	return ListenerMap->Contains(Handle);
 }
 
-void UOGGameplayTriggerSubsystem::ProcessPendingOperations()
+void UOGGameplayTriggerSubsystem::EnqueueAndProcessOperation(const FOGPendingTriggerOperation& Operation)
 {
-	if (bIsProcessingTrigger)
+	const bool bShouldProcess = OperationQueue.IsEmpty();
+	EnqueueOperation(Operation);
+	if (!bShouldProcess)
 		return;
 	
-	bIsProcessingTrigger = true;
-	ON_SCOPE_EXIT
-	{
-		bIsProcessingTrigger = false;
-	};
-
-	while (!PendingOperations.IsEmpty())
+	FOGPendingTriggerOperation CurrentOperation;
+	while (PeekOperation(CurrentOperation))
 	{
 		for (auto& [Handle,SharedListenerData] : ListenersPendingAdd)
         {
@@ -222,36 +252,43 @@ void UOGGameplayTriggerSubsystem::ProcessPendingOperations()
         }
         ListenersPendingRemove.Empty();
         
-        ProcessNextTriggerOperation();
+        ProcessTriggerOperation(CurrentOperation);
+		
+		PopOperation();
 	}
 }
 
-void UOGGameplayTriggerSubsystem::ProcessNextTriggerOperation()
+void UOGGameplayTriggerSubsystem::ProcessTriggerOperation(const FOGPendingTriggerOperation& TriggerOperation)
 {
-	FOGPendingTriggerOperation TriggerOperation;
-	if (!PendingOperations.Dequeue(TriggerOperation))
-		return;
 	UOGGameplayTriggerContext* TriggerContext;
 
-	if (!!(TriggerOperation.Operation & EOGTriggerOperationFlags::AddActiveTrigger))
+	if (!!(TriggerOperation.Operation & EOGTriggerOperationFlags::Op_AddActiveTrigger))
 	{
-		TriggerContext = TriggerOperation.NewTriggerContext.Get();
+		TriggerContext = TriggerOperation.StoredTriggerContext.Get();
 		AddActiveTrigger_Internal(TriggerOperation.Handle, TriggerContext);
+	}
+	else if (!!(TriggerOperation.Operation & EOGTriggerOperationFlags::Op_UpdateActiveTrigger))
+	{
+		TriggerContext = TriggerOperation.StoredTriggerContext.Get();
+		UpdateActiveTrigger_Internal(TriggerOperation.Handle, TriggerContext);
 	}
 	else
 	{
 		TriggerContext = ActiveTriggersByType.FindChecked(TriggerOperation.Handle.TriggerType).FindChecked(TriggerOperation.Handle).Get();
 	}
 	
-	if (!!(TriggerOperation.Operation & EOGTriggerOperationFlags::ProcessCallbacks))
+	if (!!(TriggerOperation.Operation & EOGTriggerOperationFlags::Op_ProcessCallbacks))
 	{
 		ProcessTriggerCallbacks(TriggerOperation.Handle, EOGTriggerListenerPhases(uint8(TriggerOperation.Operation) & uint8(EOGTriggerListenerPhases::All)), TriggerContext);
 	}
-	if (!!(TriggerOperation.Operation & EOGTriggerOperationFlags::NetworkRPC))
+	if (!!(TriggerOperation.Operation & EOGTriggerOperationFlags::Op_NetworkRPC))
 	{
 		//TODO: replicate via RPC, necessary for networked instantaneous triggers since they will never stay in the array long enough to replicate by value
+		//Caution! I believe you can only fire a reliable RPC once per net update, so if there are multiple instantaneous networked triggers at once it will likely cause problems.
+		//I could batch the triggers but that gets to be a lot of extra work to support networked gameplay triggers, especially if I try to maintain trigger order.
+		//I do want to support networked persistent triggers though
 	}
-	if (!!(TriggerOperation.Operation & EOGTriggerOperationFlags::RemoveActiveTrigger))
+	if (!!(TriggerOperation.Operation & EOGTriggerOperationFlags::Op_RemoveActiveTrigger))
 	{
 		RemoveActiveTrigger_Internal(TriggerOperation.Handle);
 	}
@@ -290,6 +327,31 @@ void UOGGameplayTriggerSubsystem::AddActiveTrigger_Internal(const FOGGameplayTri
 	ActiveTriggersByType.FindOrAdd(Trigger->TriggerType).Add(Handle, StrongTrigger);
 }
 
+void UOGGameplayTriggerSubsystem::UpdateActiveTrigger_Internal(const FOGGameplayTriggerHandle& Handle, UOGGameplayTriggerContext* Trigger)
+{
+	const TStrongObjectPtr<UOGGameplayTriggerContext> TriggerBeingModified = ActiveTriggersByType.FindChecked(Handle.TriggerType).FindChecked(Handle);
+	
+	//TODO: I'm not 100% sure that uobject equality check will just check if the pointers are the same
+	if (TriggerBeingModified.Get() == Trigger)
+	{
+		//The trigger may have been modified in place
+		if (IsTriggerTypeReplicated(TriggerBeingModified->TriggerType))
+		{
+			//TODO: find element and mark it dirty
+		}
+	}
+	else
+	{
+		if (IsTriggerTypeReplicated(TriggerBeingModified->TriggerType))
+		{
+			ReplicatedTriggers.RemoveSwap(TriggerBeingModified.Get());
+			ReplicatedTriggers.Add(Trigger);
+		}
+		const TStrongObjectPtr StrongTrigger(Trigger);
+        ActiveTriggersByType.FindOrAdd(Trigger->TriggerType).Add(Handle, StrongTrigger);
+	}
+}
+
 void UOGGameplayTriggerSubsystem::RemoveActiveTrigger_Internal(const FOGGameplayTriggerHandle& Handle)
 {
 	const TStrongObjectPtr<UOGGameplayTriggerContext> TriggerBeingRemoved = ActiveTriggersByType.FindChecked(Handle.TriggerType).FindAndRemoveChecked(Handle);
@@ -308,4 +370,25 @@ void UOGGameplayTriggerSubsystem::AddTriggerListener_Internal(const FOGTriggerLi
 void UOGGameplayTriggerSubsystem::RemoveTriggerListener_Internal(const FOGTriggerListenerHandle& Handle)
 {
 	ListenersByType.FindChecked(Handle.TriggerType).Remove(Handle);
+}
+
+void UOGGameplayTriggerSubsystem::EnqueueOperation(const FOGPendingTriggerOperation& Operation)
+{
+	//Enqueue at Head and Dequeue at Tail so that iterating through the queue will access the last operations first
+	OperationQueue.AddHead(Operation);
+}
+
+bool UOGGameplayTriggerSubsystem::PeekOperation(FOGPendingTriggerOperation& OutOperation) const
+{
+	if (OperationQueue.IsEmpty())
+		return false;
+	OutOperation = OperationQueue.GetTail()->GetValue();
+	return true;
+}
+
+void UOGGameplayTriggerSubsystem::PopOperation()
+{
+	if (OperationQueue.IsEmpty())
+		return;
+	OperationQueue.RemoveNode(OperationQueue.GetTail());
 }

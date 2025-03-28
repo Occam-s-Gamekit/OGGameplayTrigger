@@ -21,6 +21,7 @@ public class OGGameplayTriggerTests : ModuleRules
                 "Slate",
                 "SlateCore",
                 "GameplayTags",
+                "OGCore",
                 "OGGameplayTrigger",
                 "UnrealEd",
             }

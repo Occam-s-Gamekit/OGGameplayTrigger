@@ -1,4 +1,6 @@
-﻿#include "CoreMinimal.h"
+﻿#include "OGGameplayTriggerTests.h"
+
+#include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "OGGameplayTriggerSubsystem.h"
 #include "OGGameplayTriggerTypes.h"
@@ -206,12 +208,14 @@ bool FOGTriggerSubsystemBasicTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Test completed without crashing"), true);
     }
 
-    // Test 7: Test StartTrigger and EndTrigger flow with proper phases
+    // Test 7: Test StartTrigger, UpdateTrigger, and EndTrigger flow with proper phases
     {
         FGameplayTag TestTriggerType = FGameplayTag::RequestGameplayTag(TEXT("Test.Trigger.Basic"));
         EOGTriggerListenerPhases ReceivedStartPhase = EOGTriggerListenerPhases::None;
+        EOGTriggerListenerPhases ReceivedUpdatePhase = EOGTriggerListenerPhases::None;
         EOGTriggerListenerPhases ReceivedEndPhase = EOGTriggerListenerPhases::None;
         int32 StartCallCount = 0;
+        int32 UpdateCallCount = 0;
         int32 EndCallCount = 0;
 
         // Create test delegates
@@ -220,6 +224,16 @@ bool FOGTriggerSubsystemBasicTest::RunTest(const FString& Parameters)
         {
             ReceivedStartPhase = TriggerPhase;
             StartCallCount++;
+            TestEqual(TEXT("Data at Trigger Start"),ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 123);
+        });
+
+        // Create test delegates
+        FOGTriggerDelegate UpdateDelegate;
+        UpdateDelegate.BindLambda([&](const FOGGameplayTriggerHandle& TriggerHandle, const EOGTriggerListenerPhases& TriggerPhase, const UOGGameplayTriggerContext* ActiveTrigger)
+        {
+            ReceivedStartPhase = TriggerPhase;
+            UpdateCallCount++;
+            TestEqual(TEXT("Data at Trigger Update"),ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 456);
         });
 
         FOGTriggerDelegate EndDelegate;
@@ -227,29 +241,45 @@ bool FOGTriggerSubsystemBasicTest::RunTest(const FString& Parameters)
         {
             ReceivedEndPhase = TriggerPhase;
             EndCallCount++;
+            TestEqual(TEXT("Data at Trigger End"),ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 456);
         });
 
         // Register separate listeners for start and end phases
         FOGTriggerListenerHandle StartListenerHandle = TriggerSubsystem->RegisterTriggerListener(TestTriggerType, EOGTriggerListenerPhases::TriggerStart, StartDelegate);
+        FOGTriggerListenerHandle UpdateListenerHandle = TriggerSubsystem->RegisterTriggerListener(TestTriggerType, EOGTriggerListenerPhases::TriggerUpdate, UpdateDelegate);
         FOGTriggerListenerHandle EndListenerHandle = TriggerSubsystem->RegisterTriggerListener(TestTriggerType, EOGTriggerListenerPhases::TriggerEnd, EndDelegate);
 
         // Create and start the trigger
         UOGGameplayTriggerContext* TriggerContext = TriggerSubsystem->MakeGameplayTriggerContext(TestTriggerType, FGameplayTagContainer::EmptyContainer);
+        TriggerContext->AdditionalData.AddUnique<FTestTriggerData_Int>().TestInt = 123;
         FOGGameplayTriggerHandle TriggerHandle = TriggerSubsystem->StartTrigger(TriggerContext);
 
         // Verify only start phase was fired
         TestEqual(TEXT("Start callback should have been called once"), StartCallCount, 1);
+        TestEqual(TEXT("Update callback should not have been called yet"), UpdateCallCount, 0);
         TestEqual(TEXT("End callback should not have been called yet"), EndCallCount, 0);
         TestEqual(TEXT("Start phase should be TriggerStart"), ReceivedStartPhase, EOGTriggerListenerPhases::TriggerStart);
 
+        UOGGameplayTriggerContext* ContextToUpdate = TriggerSubsystem->GetTriggerContextForUpdate(TriggerHandle);
+        ContextToUpdate->AdditionalData.GetChecked<FTestTriggerData_Int>().TestInt = 456;
+        TriggerSubsystem->UpdateTrigger(TriggerHandle, ContextToUpdate);
+        
+        // Verify update was called 
+        TestEqual(TEXT("Start callback should have been called once"), StartCallCount, 1);
+        TestEqual(TEXT("Update callback should have been called once"), UpdateCallCount, 1);
+        TestEqual(TEXT("End callback should not have been called yet"), EndCallCount, 0);
+        TestEqual(TEXT("Update phase should be TriggerUpdate"), ReceivedStartPhase, EOGTriggerListenerPhases::TriggerUpdate);
+        
         // End the trigger and verify end phase was fired
         TriggerSubsystem->EndTrigger(TriggerHandle);
         TestEqual(TEXT("Start callback should still be called once"), StartCallCount, 1);
+        TestEqual(TEXT("Update callback should have been called once"), UpdateCallCount, 1);
         TestEqual(TEXT("End callback should have been called once"), EndCallCount, 1);
         TestEqual(TEXT("End phase should be TriggerEnd"), ReceivedEndPhase, EOGTriggerListenerPhases::TriggerEnd);
 
         // Clean up
         TriggerSubsystem->RemoveTriggerListener(StartListenerHandle);
+        TriggerSubsystem->RemoveTriggerListener(UpdateListenerHandle);
         TriggerSubsystem->RemoveTriggerListener(EndListenerHandle);
     }
 
@@ -624,7 +654,6 @@ bool FOGTriggerSubsystemPendingOperationsTest::RunTest(const FString& Parameters
         FGameplayTag TestTriggerType = FGameplayTag::RequestGameplayTag(TEXT("Test.Trigger.Basic"));
         int32 MainCallbackCount = 0;
         int32 SecondCallbackCount = 0;
-        int32 ThirdCallbackCount = 0;
         FOGTriggerListenerHandle SecondHandle;
         FOGGameplayTriggerHandle TriggerHandleA;
         FOGGameplayTriggerHandle TriggerHandleB;
@@ -682,6 +711,63 @@ bool FOGTriggerSubsystemPendingOperationsTest::RunTest(const FString& Parameters
         TriggerSubsystem->EndTrigger(TriggerHandleB);
         TriggerSubsystem->RemoveTriggerListener(MainHandle);
         TriggerSubsystem->RemoveTriggerListener(SecondHandle);
+    }
+
+    // Test 6: Multiple 'simultaneous' updates to a trigger
+    {
+        FGameplayTag TestTriggerType = FGameplayTag::RequestGameplayTag(TEXT("Test.Trigger.Basic"));
+        int32 StartCallbackCount = 0;
+        int32 UpdateCallbackCount = 0;
+
+        // Create delegates
+        FOGTriggerDelegate MainDelegate;
+        MainDelegate.BindLambda([&](const FOGGameplayTriggerHandle& TriggerHandle, const EOGTriggerListenerPhases& TriggerPhase, const UOGGameplayTriggerContext* ActiveTrigger)
+        {
+            StartCallbackCount++;
+
+            TestEqual(TEXT("Data On Start"), ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 789);
+
+            UOGGameplayTriggerContext* ContextForUpdate = TriggerSubsystem->GetTriggerContextForUpdate(TriggerHandle);
+            ContextForUpdate->AdditionalData.GetChecked<FTestTriggerData_Int>().TestInt++;
+            TriggerSubsystem->UpdateTrigger(TriggerHandle, ContextForUpdate);
+        });
+
+        // Create delegates
+        FOGTriggerDelegate UpdateDelegate;
+        UpdateDelegate.BindLambda([&](const FOGGameplayTriggerHandle& TriggerHandle, const EOGTriggerListenerPhases& TriggerPhase, const UOGGameplayTriggerContext* ActiveTrigger)
+        {
+            TestEqual(TEXT("Start should be called twice before any updates"), StartCallbackCount, 2);
+            
+            UpdateCallbackCount++;
+            
+            TestEqual(TEXT("Data On Update in first update should be one more than data at start, and in second update should be one higher again"),
+                ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 789 + UpdateCallbackCount);
+        });
+
+        // Register two listeners that will update the trigger on start
+        FOGTriggerListenerHandle StartHandleOne = TriggerSubsystem->RegisterTriggerListener(TestTriggerType, 
+            EOGTriggerListenerPhases::TriggerStart, MainDelegate);
+        FOGTriggerListenerHandle StartHandleTwo = TriggerSubsystem->RegisterTriggerListener(TestTriggerType, 
+            EOGTriggerListenerPhases::TriggerStart, MainDelegate);
+
+        FOGTriggerListenerHandle UpdateHandle = TriggerSubsystem->RegisterTriggerListener(TestTriggerType,
+            EOGTriggerListenerPhases::TriggerUpdate, UpdateDelegate);
+        
+        // Initial trigger fire
+        UOGGameplayTriggerContext* InitialContext = TriggerSubsystem->MakeGameplayTriggerContext(TestTriggerType, 
+            FGameplayTagContainer::EmptyContainer);
+        InitialContext->AdditionalData.AddUnique<FTestTriggerData_Int>().TestInt = 789;
+        FOGGameplayTriggerHandle TriggerHandle = TriggerSubsystem->StartTrigger(InitialContext);
+
+        // Verify operation ordering
+        TestEqual(TEXT("Main callback should have been called twice"), StartCallbackCount, 2);
+        TestEqual(TEXT("Update callback should have been called twice"), UpdateCallbackCount, 2);
+
+        // Clean up
+        TriggerSubsystem->RemoveTriggerListener(StartHandleOne);
+        TriggerSubsystem->RemoveTriggerListener(StartHandleTwo);
+        TriggerSubsystem->RemoveTriggerListener(UpdateHandle);
+        TriggerHandle.Reset();
     }
 
     return true;
