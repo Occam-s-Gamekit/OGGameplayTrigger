@@ -48,7 +48,7 @@ struct OGGAMEPLAYTRIGGER_API FOGTriggerDataType : public FOGPolymorphicStructBas
 };
 
 USTRUCT(BlueprintType)
-struct OGGAMEPLAYTRIGGER_API FOGTriggerData : public FOGPolymorphicDataBankBase
+struct OGGAMEPLAYTRIGGER_API FOGTriggerDataBank : public FOGPolymorphicDataBankBase
 {
     GENERATED_BODY();
 
@@ -56,7 +56,7 @@ struct OGGAMEPLAYTRIGGER_API FOGTriggerData : public FOGPolymorphicDataBankBase
 };
 
 template<>
-struct TStructOpsTypeTraits<FOGTriggerData> : public TStructOpsTypeTraitsBase2<FOGTriggerData>
+struct TStructOpsTypeTraits<FOGTriggerDataBank> : public TStructOpsTypeTraitsBase2<FOGTriggerDataBank>
 {
     enum
     {
@@ -123,5 +123,29 @@ public:
     FGameplayTagContainer TriggerTags = FGameplayTagContainer::EmptyContainer;
     
     UPROPERTY(Replicated, BlueprintReadWrite)
-    FOGTriggerData AdditionalData;
+    FOGTriggerDataBank DataBank;
+};
+
+UCLASS(Blueprintable, Abstract)
+class OGGAMEPLAYTRIGGER_API UOGGameplayTriggerFilter : public UObject
+{
+    GENERATED_BODY()
+
+public:
+    // If a trigger fails to pass any of the filters registered on the filter, the listener will not be called for that trigger.
+    bool DoesTriggerPassFilter(const EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, bool& OutIsFilterStale) const;
+
+protected:
+
+    // Setting IsTriggerBlocked true will prevent the trigger from firing the listener this filter is attached to.
+    // Setting IsFilterStale true will cause the listener this filter is attached to be cleaned up.
+    // IsFilterStale should only be true if the filter detects that it will block all triggers from this point on
+    // This could happen because an object that the filter needs is no longer valid
+    UFUNCTION(BlueprintImplementableEvent, DisplayName="DoesFilterBlockTrigger")
+    void DoesTriggerPassFilter_BP(const EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, bool& bDoesTriggerPass, bool& bIsFilterStale) const;
+    // Returning true will prevent the trigger from firing on the listener this filter is attached to.
+    // Setting IsFilterStale true will cause the listener this filter is attached to be cleaned up.
+    // IsFilterStale should only be true if the filter detects that it will block all triggers from this point on
+    // This could happen because an object that the filter needs is no longer valid
+    virtual bool DoesTriggerPassFilter_Native(const EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, bool& OutIsFilterStale) const {return true;}
 };

@@ -24,9 +24,9 @@ class OGGAMEPLAYTRIGGER_API UOGWhenGameplayTriggerTask : public UGameplayTask
 	FOGGameplayTriggerTaskDelegate When;
 
 	UFUNCTION(BlueprintCallable, Category = "GameplayTrigger", meta = (DefaultToSelf="TaskOwner", BlueprintInternalUseOnly = "TRUE",
-		GameplayTagFilter="Trigger", AdvancedDisplay="FilterInstigator,FilterTarget"))
-	static UOGWhenGameplayTriggerTask* WhenGameplayTrigger(TScriptInterface<IGameplayTaskOwnerInterface> TaskOwner, const FGameplayTag TriggerType, EOGTriggerListenerPhases TriggerPhase = EOGTriggerListenerPhases::TriggerStart,
-		const bool bOnce = false, const bool bShouldFireForExistingTriggers = false, const UObject* FilterInstigator = nullptr, const UObject* FilterTarget = nullptr);
+		GameplayTagFilter="Trigger", AutoCreateRefTerm="Filters", AdvancedDisplay="FilterInstigator,FilterTarget,Filters"))
+	static UOGWhenGameplayTriggerTask* WhenGameplayTrigger(TScriptInterface<IGameplayTaskOwnerInterface> TaskOwner, const FGameplayTag TriggerType, EOGTriggerListenerPhases TriggerPhase,
+		const bool bOnce, const bool bShouldFireForExistingTriggers, const UObject* FilterInstigator, const UObject* FilterTarget, const TArray<UOGGameplayTriggerFilter*>& Filters);
 	
 protected:
 	UFUNCTION()
@@ -45,6 +45,9 @@ private:
 	TObjectPtr<const UObject> FilterInstigator;
 	UPROPERTY()
 	TObjectPtr<const UObject> FilterTarget;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UOGGameplayTriggerFilter>> FilterObjects;
 	
 	FOGTriggerListenerHandle Handle;
 	TOGPromise<void> WhenExpired = TOGPromise<void>(nullptr);
@@ -64,9 +67,9 @@ class OGGAMEPLAYTRIGGER_API UOGWhenGameplayTriggerTask_MultiPhase : public UGame
 	FOGGameplayTriggerTaskDelegate WhenEnd;
 
 	UFUNCTION(BlueprintCallable, Category = "GameplayTrigger", meta = (DefaultToSelf="TaskOwner", BlueprintInternalUseOnly = "TRUE",
-		GameplayTagFilter="Trigger", AdvancedDisplay="FilterInstigator,FilterTarget"))
+		GameplayTagFilter="Trigger", AutoCreateRefTerm="Filters", AdvancedDisplay="FilterInstigator,FilterTarget,Filters"))
 	static UOGWhenGameplayTriggerTask_MultiPhase* WhenGameplayTrigger_MultiPhase(TScriptInterface<IGameplayTaskOwnerInterface> TaskOwner, const FGameplayTag TriggerType,
-		const bool bShouldFireForExistingTriggers = false, const UObject* FilterInstigator = nullptr, const UObject* FilterTarget = nullptr);
+		const bool bShouldFireForExistingTriggers, const UObject* FilterInstigator, const UObject* FilterTarget, const TArray<UOGGameplayTriggerFilter*>& Filters);
 	
 protected:
 	UFUNCTION()
@@ -83,6 +86,8 @@ private:
 	TObjectPtr<const UObject> FilterInstigator;
 	UPROPERTY()
 	TObjectPtr<const UObject> FilterTarget;
+	UPROPERTY()
+	TArray<TObjectPtr<UOGGameplayTriggerFilter>> FilterObjects;
 	
 	FOGTriggerListenerHandle Handle;
 	TOGPromise<void> WhenExpired = TOGPromise<void>(nullptr);

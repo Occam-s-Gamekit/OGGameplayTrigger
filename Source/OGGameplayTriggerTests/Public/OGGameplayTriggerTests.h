@@ -10,6 +10,15 @@ struct FTestTriggerData_Int : public FOGTriggerDataType
 {
 	GENERATED_BODY()
 
-	UPROPERTY()
+	UPROPERTY(BlueprintReadWrite)
 	int TestInt;
+};
+
+UCLASS(NotBlueprintType)
+class UOGTestTriggerFilter_DataIsPositive : public UOGGameplayTriggerFilter
+{
+	GENERATED_BODY()
+
+protected:
+	virtual bool DoesTriggerPassFilter_Native(const EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, bool& OutIsFilterStale) const override;
 };

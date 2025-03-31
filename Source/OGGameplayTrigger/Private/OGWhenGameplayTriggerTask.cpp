@@ -6,10 +6,13 @@
 #include "OGGameplayTriggerSubsystem.h"
 
 UOGWhenGameplayTriggerTask* UOGWhenGameplayTriggerTask::WhenGameplayTrigger(TScriptInterface<IGameplayTaskOwnerInterface> TaskOwner, const FGameplayTag TriggerType, EOGTriggerListenerPhases TriggerPhase,
-                                                                            const bool bOnce, const bool bShouldFireForExistingTriggers, const UObject* FilterInstigator, const UObject* FilterTarget)
+                                                                            const bool bOnce, const bool bShouldFireForExistingTriggers, const UObject* FilterInstigator, const UObject* FilterTarget,
+                                                                            const TArray<UOGGameplayTriggerFilter*>& Filters)
 {
+	if (!ensureMsgf(TriggerPhase, TEXT("Tried to start a trigger listener with no trigger phase")))
+		return nullptr;
+	
 	UOGWhenGameplayTriggerTask* Task = NewTask<UOGWhenGameplayTriggerTask>(TaskOwner);
-
 	if (!Task)
 		return nullptr;
 	
@@ -19,6 +22,7 @@ UOGWhenGameplayTriggerTask* UOGWhenGameplayTriggerTask::WhenGameplayTrigger(TScr
 	Task->bOnce = bOnce;
 	Task->FilterInstigator = FilterInstigator;
 	Task->FilterTarget = FilterTarget;
+	Task->FilterObjects = Filters;
 
 	return Task;
 }
@@ -37,7 +41,7 @@ void UOGWhenGameplayTriggerTask::OnTrigger(const FOGGameplayTriggerHandle& Trigg
 void UOGWhenGameplayTriggerTask::Activate()
 {
 	UOGGameplayTriggerSubsystem* TriggerSubsystem = UOGGameplayTriggerSubsystem::Get(this);
-	Handle = TriggerSubsystem->RegisterTriggerListener(TriggerType, TriggerPhase, FOGTriggerDelegate::CreateUObject(this, &UOGWhenGameplayTriggerTask::OnTrigger), FilterInstigator, FilterTarget, bShouldFireForExistingTriggers, &WhenListenerRemoved);
+	Handle = TriggerSubsystem->RegisterTriggerListener(TriggerType, TriggerPhase, FOGTriggerDelegate::CreateUObject(this, &UOGWhenGameplayTriggerTask::OnTrigger), FilterInstigator, FilterTarget, bShouldFireForExistingTriggers, FilterObjects, &WhenListenerRemoved);
 	WhenListenerRemoved->Then(TOGFuture<void>::FThenDelegate::CreateUObject(this, &UOGWhenGameplayTriggerTask::EndTask));
 }
 
@@ -47,12 +51,12 @@ void UOGWhenGameplayTriggerTask::OnDestroy(bool bInOwnerFinished)
 	When.Clear();
 	//Remove the trigger listener if it hasn't been already.
 	Handle.Reset();
-	
+	FilterObjects.Empty();
 	Super::OnDestroy(bInOwnerFinished);
 }
 
 UOGWhenGameplayTriggerTask_MultiPhase* UOGWhenGameplayTriggerTask_MultiPhase::WhenGameplayTrigger_MultiPhase(TScriptInterface<IGameplayTaskOwnerInterface> TaskOwner,
-	const FGameplayTag TriggerType, const bool bShouldFireForExistingTriggers, const UObject* FilterInstigator, const UObject* FilterTarget)
+	const FGameplayTag TriggerType, const bool bShouldFireForExistingTriggers, const UObject* FilterInstigator, const UObject* FilterTarget, const TArray<UOGGameplayTriggerFilter*>& Filters)
 {
 	UOGWhenGameplayTriggerTask_MultiPhase* Task = NewTask<UOGWhenGameplayTriggerTask_MultiPhase>(TaskOwner);
 
@@ -63,6 +67,7 @@ UOGWhenGameplayTriggerTask_MultiPhase* UOGWhenGameplayTriggerTask_MultiPhase::Wh
 	Task->bShouldFireForExistingTriggers = bShouldFireForExistingTriggers;
 	Task->FilterInstigator = FilterInstigator;
 	Task->FilterTarget = FilterTarget;
+	Task->FilterObjects = Filters;
 
 	return Task;
 }
@@ -87,7 +92,7 @@ void UOGWhenGameplayTriggerTask_MultiPhase::OnTrigger(const FOGGameplayTriggerHa
 void UOGWhenGameplayTriggerTask_MultiPhase::Activate()
 {
 	UOGGameplayTriggerSubsystem* TriggerSubsystem = UOGGameplayTriggerSubsystem::Get(this);
-	Handle = TriggerSubsystem->RegisterTriggerListener(TriggerType, EOGTriggerListenerPhases::All, FOGTriggerDelegate::CreateUObject(this, &UOGWhenGameplayTriggerTask_MultiPhase::OnTrigger), FilterInstigator, FilterTarget, bShouldFireForExistingTriggers, &WhenListenerRemoved);
+	Handle = TriggerSubsystem->RegisterTriggerListener(TriggerType, EOGTriggerListenerPhases::All, FOGTriggerDelegate::CreateUObject(this, &UOGWhenGameplayTriggerTask_MultiPhase::OnTrigger), FilterInstigator, FilterTarget, bShouldFireForExistingTriggers, FilterObjects, &WhenListenerRemoved);
 	WhenListenerRemoved->Then(TOGFuture<void>::FThenDelegate::CreateUObject(this, &UOGWhenGameplayTriggerTask::EndTask));
 }
 

@@ -20,8 +20,11 @@ struct OGGAMEPLAYTRIGGER_API FOGTriggerListenerData
 	FOGTriggerListenerData() {}
 	
 	FOGTriggerListenerData(const FGameplayTag& InTriggerType, EOGTriggerListenerPhases InListenerPhases,
-		const FOGTriggerDelegate& InCallback, const UObject* FilterInstigatorObject = nullptr, const UObject* FilterTargetObject = nullptr);
+		const FOGTriggerDelegate& InCallback, const UObject* FilterInstigatorObject = nullptr, const UObject* FilterTargetObject = nullptr,
+		const TArray<UOGGameplayTriggerFilter*>& Filters = TArray<UOGGameplayTriggerFilter*>());
 
+	~FOGTriggerListenerData();
+	
 	FGameplayTag TriggerType = FGameplayTag::EmptyTag;
 
 	EOGTriggerListenerPhases ListenerPhases = EOGTriggerListenerPhases::None;
@@ -33,12 +36,11 @@ struct OGGAMEPLAYTRIGGER_API FOGTriggerListenerData
 	
 	FOGTriggerDelegate Callback;
 	
-	//TODO: Add filter information
+	TArray<TStrongObjectPtr<UOGGameplayTriggerFilter>> FilterObjects;
 	
 	TOGPromise<void> WhenListenerRemoved;
 	
-	bool IsListenerValid() const;
-	bool ShouldListenerProcessTrigger(EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger) const;
+	bool ShouldListenerProcessTrigger(EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, bool& bOutIsFilterStale) const;
 };
 
 /**
@@ -88,9 +90,18 @@ public:
 	UOGGameplayTriggerContext* GetTriggerContextForUpdate(const FOGGameplayTriggerHandle& TriggerHandle);
 	
 	//TODO: Add filter information
-	//TODO: Add convenience functions for commonly used delegate types
 	FOGTriggerListenerHandle RegisterTriggerListener(const FGameplayTag& TriggerType, EOGTriggerListenerPhases Phases, const FOGTriggerDelegate& Delegate,
-		const UObject* FilterInstigator = nullptr, const UObject* FilterTarget = nullptr, const bool bShouldFireForExistingTriggers = false, TOGFuture<void>* OutWhenListenerRemoved = nullptr);
+		const UObject* FilterInstigator = nullptr, const UObject* FilterTarget = nullptr, const bool bShouldFireForExistingTriggers = false, const TArray<UOGGameplayTriggerFilter*>& Filters = TArray<UOGGameplayTriggerFilter*>(), TOGFuture<void>* OutWhenListenerRemoved = nullptr);
+
+	//Convenience function to make it easier to create listeners with weak lambda callbacks
+	template<typename Func UE_REQUIRES(std::is_void_v<TInvokeResult_T<Func, const FOGGameplayTriggerHandle&, const EOGTriggerListenerPhases&, const UOGGameplayTriggerContext*>>)>
+	FOGTriggerListenerHandle RegisterTriggerListener(const UObject* ContextObject, const FGameplayTag& TriggerType, EOGTriggerListenerPhases Phases, Func Lambda,
+		const UObject* FilterInstigator = nullptr, const UObject* FilterTarget = nullptr, const bool bShouldFireForExistingTriggers = false, const TArray<UOGGameplayTriggerFilter*>& Filters = TArray<UOGGameplayTriggerFilter*>(), TOGFuture<void>* OutWhenListenerRemoved = nullptr)
+	{
+		return RegisterTriggerListener(TriggerType, Phases, FOGTriggerDelegate::CreateWeakLambda(ContextObject, Lambda),
+			FilterInstigator, FilterTarget, bShouldFireForExistingTriggers, Filters, OutWhenListenerRemoved);
+	}
+	
 	void RemoveTriggerListener(const FOGTriggerListenerHandle& Handle);
 	
 	// Start a trigger that does not persist - Takes a TriggerContext that has been created with MakeGameplayTriggerContext
@@ -122,6 +133,8 @@ public:
 	//Checks if the listener referenced by that handle is listening for new trigger events
 	bool IsListenerHandleValid(const FOGTriggerListenerHandle& Handle);
 
+	virtual void Deinitialize() override;
+
 protected:
 	FOGGameplayTriggerHandle StartTrigger_Internal(UOGGameplayTriggerContext* TriggerContext, EOGTriggerOperationFlags Operations);
 	
@@ -148,7 +161,7 @@ private:
 	void RemoveTriggerListener_Internal(const FOGTriggerListenerHandle& Handle);
 
 	void EnqueueOperation(const FOGPendingTriggerOperation& Operation);
-	bool PeekOperation(FOGPendingTriggerOperation& OutOperation) const;
+	bool PeekOperation(FOGPendingTriggerOperation*& OutOperation) const;
 	void PopOperation();
 	
 	TMap<FGameplayTag, ListenerMap> ListenersByType;

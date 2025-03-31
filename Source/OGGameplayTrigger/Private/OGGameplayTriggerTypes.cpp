@@ -56,5 +56,16 @@ void UOGGameplayTriggerContext::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, TriggerTags, Params)
 	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, InitiatorObject, Params)
 	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, TargetObject, Params)
-	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, AdditionalData, Params)
+	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, DataBank, Params)
+}
+
+bool UOGGameplayTriggerFilter::DoesTriggerPassFilter(const EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, bool& OutIsFilterStale) const
+{
+	if (!DoesTriggerPassFilter_Native(TriggerPhase, Trigger, OutIsFilterStale))
+	{
+		return false;
+	}
+	bool bPasses = true;
+	DoesTriggerPassFilter_BP(TriggerPhase, Trigger, bPasses, OutIsFilterStale);
+	return bPasses;
 }

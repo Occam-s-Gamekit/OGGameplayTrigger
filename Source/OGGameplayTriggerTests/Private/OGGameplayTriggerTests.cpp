@@ -224,7 +224,7 @@ bool FOGTriggerSubsystemBasicTest::RunTest(const FString& Parameters)
         {
             ReceivedStartPhase = TriggerPhase;
             StartCallCount++;
-            TestEqual(TEXT("Data at Trigger Start"),ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 123);
+            TestEqual(TEXT("Data at Trigger Start"),ActiveTrigger->DataBank.GetConstChecked<FTestTriggerData_Int>().TestInt, 123);
         });
 
         // Create test delegates
@@ -233,7 +233,7 @@ bool FOGTriggerSubsystemBasicTest::RunTest(const FString& Parameters)
         {
             ReceivedStartPhase = TriggerPhase;
             UpdateCallCount++;
-            TestEqual(TEXT("Data at Trigger Update"),ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 456);
+            TestEqual(TEXT("Data at Trigger Update"),ActiveTrigger->DataBank.GetConstChecked<FTestTriggerData_Int>().TestInt, 456);
         });
 
         FOGTriggerDelegate EndDelegate;
@@ -241,7 +241,7 @@ bool FOGTriggerSubsystemBasicTest::RunTest(const FString& Parameters)
         {
             ReceivedEndPhase = TriggerPhase;
             EndCallCount++;
-            TestEqual(TEXT("Data at Trigger End"),ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 456);
+            TestEqual(TEXT("Data at Trigger End"),ActiveTrigger->DataBank.GetConstChecked<FTestTriggerData_Int>().TestInt, 456);
         });
 
         // Register separate listeners for start and end phases
@@ -251,7 +251,7 @@ bool FOGTriggerSubsystemBasicTest::RunTest(const FString& Parameters)
 
         // Create and start the trigger
         UOGGameplayTriggerContext* TriggerContext = TriggerSubsystem->MakeGameplayTriggerContext(TestTriggerType, FGameplayTagContainer::EmptyContainer);
-        TriggerContext->AdditionalData.AddUnique<FTestTriggerData_Int>().TestInt = 123;
+        TriggerContext->DataBank.AddUnique<FTestTriggerData_Int>().TestInt = 123;
         FOGGameplayTriggerHandle TriggerHandle = TriggerSubsystem->StartTrigger(TriggerContext);
 
         // Verify only start phase was fired
@@ -261,7 +261,7 @@ bool FOGTriggerSubsystemBasicTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Start phase should be TriggerStart"), ReceivedStartPhase, EOGTriggerListenerPhases::TriggerStart);
 
         UOGGameplayTriggerContext* ContextToUpdate = TriggerSubsystem->GetTriggerContextForUpdate(TriggerHandle);
-        ContextToUpdate->AdditionalData.GetChecked<FTestTriggerData_Int>().TestInt = 456;
+        ContextToUpdate->DataBank.GetChecked<FTestTriggerData_Int>().TestInt = 456;
         TriggerSubsystem->UpdateTrigger(TriggerHandle, ContextToUpdate);
         
         // Verify update was called 
@@ -414,6 +414,57 @@ bool FOGTriggerSubsystemBasicTest::RunTest(const FString& Parameters)
         
         // Clean up
         TriggerSubsystem->RemoveTriggerListener(MultiPhaseHandle);
+    }
+
+    // Test 10: test filters
+    {
+        FGameplayTag TestTriggerType = FGameplayTag::RequestGameplayTag(TEXT("Test.Trigger.Basic"));
+        int ReceivedFilteredCount = 0;
+        int ReceivedUnfilteredCount = 0;
+
+        // Create test delegates that record filtered and unfiltered counts
+        FOGTriggerDelegate FilteredTriggerDelegate;
+        FilteredTriggerDelegate.BindLambda([&](const FOGGameplayTriggerHandle& TriggerHandle, const EOGTriggerListenerPhases& TriggerPhase, const UOGGameplayTriggerContext* ActiveTrigger)
+        {
+            ReceivedFilteredCount++;
+        });
+        
+        // Create test delegates that record filtered and unfiltered counts
+        FOGTriggerDelegate UnfilteredTriggerDelegate;
+        UnfilteredTriggerDelegate.BindLambda([&](const FOGGameplayTriggerHandle& TriggerHandle, const EOGTriggerListenerPhases& TriggerPhase, const UOGGameplayTriggerContext* ActiveTrigger)
+        {
+            ReceivedUnfilteredCount++;
+        });
+        
+        // Register a listener for both start and end phases
+        FOGTriggerListenerHandle FilteredHandle = TriggerSubsystem->RegisterTriggerListener(TestTriggerType, 
+            EOGTriggerListenerPhases::TriggerStart, FilteredTriggerDelegate, nullptr, nullptr, false, {UOGTestTriggerFilter_DataIsPositive::StaticClass()->GetDefaultObject<UOGTestTriggerFilter_DataIsPositive>()});
+
+        FOGTriggerListenerHandle UnfilteredHandle = TriggerSubsystem->RegisterTriggerListener(TestTriggerType, 
+            EOGTriggerListenerPhases::TriggerStart, UnfilteredTriggerDelegate);
+
+        UOGGameplayTriggerContext* InstantTriggerContext = TriggerSubsystem->MakeGameplayTriggerContext(TestTriggerType, 
+            FGameplayTagContainer::EmptyContainer);
+        TriggerSubsystem->InstantaneousTrigger(InstantTriggerContext);
+
+        TestEqual(TEXT("Trigger with no data should not pass the filter"), ReceivedFilteredCount, 0);
+        TestEqual(TEXT("Unfiltered count should be 1"), ReceivedUnfilteredCount, 1);
+
+        InstantTriggerContext->DataBank.AddUnique<FTestTriggerData_Int>().TestInt = -123;
+        TriggerSubsystem->InstantaneousTrigger(InstantTriggerContext);
+
+        TestEqual(TEXT("Trigger with negative value in data should not pass the filter"), ReceivedFilteredCount, 0);
+        TestEqual(TEXT("Unfiltered count should be 2"), ReceivedUnfilteredCount, 2);
+
+        InstantTriggerContext->DataBank.GetChecked<FTestTriggerData_Int>().TestInt = 456;
+        TriggerSubsystem->InstantaneousTrigger(InstantTriggerContext);
+
+        TestEqual(TEXT("Trigger with positive value in data should pass the filter"), ReceivedFilteredCount, 1);
+        TestEqual(TEXT("Unfiltered count should be 3"), ReceivedUnfilteredCount, 3);
+
+        //Clean up
+        FilteredHandle.Reset();
+        UnfilteredHandle.Reset();
     }
 
     return true;
@@ -725,10 +776,10 @@ bool FOGTriggerSubsystemPendingOperationsTest::RunTest(const FString& Parameters
         {
             StartCallbackCount++;
 
-            TestEqual(TEXT("Data On Start"), ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 789);
+            TestEqual(TEXT("Data On Start"), ActiveTrigger->DataBank.GetConstChecked<FTestTriggerData_Int>().TestInt, 789);
 
             UOGGameplayTriggerContext* ContextForUpdate = TriggerSubsystem->GetTriggerContextForUpdate(TriggerHandle);
-            ContextForUpdate->AdditionalData.GetChecked<FTestTriggerData_Int>().TestInt++;
+            ContextForUpdate->DataBank.GetChecked<FTestTriggerData_Int>().TestInt++;
             TriggerSubsystem->UpdateTrigger(TriggerHandle, ContextForUpdate);
         });
 
@@ -741,7 +792,7 @@ bool FOGTriggerSubsystemPendingOperationsTest::RunTest(const FString& Parameters
             UpdateCallbackCount++;
             
             TestEqual(TEXT("Data On Update in first update should be one more than data at start, and in second update should be one higher again"),
-                ActiveTrigger->AdditionalData.GetConstChecked<FTestTriggerData_Int>().TestInt, 789 + UpdateCallbackCount);
+                ActiveTrigger->DataBank.GetConstChecked<FTestTriggerData_Int>().TestInt, 789 + UpdateCallbackCount);
         });
 
         // Register two listeners that will update the trigger on start
@@ -756,7 +807,7 @@ bool FOGTriggerSubsystemPendingOperationsTest::RunTest(const FString& Parameters
         // Initial trigger fire
         UOGGameplayTriggerContext* InitialContext = TriggerSubsystem->MakeGameplayTriggerContext(TestTriggerType, 
             FGameplayTagContainer::EmptyContainer);
-        InitialContext->AdditionalData.AddUnique<FTestTriggerData_Int>().TestInt = 789;
+        InitialContext->DataBank.AddUnique<FTestTriggerData_Int>().TestInt = 789;
         FOGGameplayTriggerHandle TriggerHandle = TriggerSubsystem->StartTrigger(InitialContext);
 
         // Verify operation ordering
@@ -771,4 +822,12 @@ bool FOGTriggerSubsystemPendingOperationsTest::RunTest(const FString& Parameters
     }
 
     return true;
+}
+
+bool UOGTestTriggerFilter_DataIsPositive::DoesTriggerPassFilter_Native(const EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, bool& OutIsFilterStale) const
+{
+    const FTestTriggerData_Int* Data = Trigger->DataBank.FindConst<FTestTriggerData_Int>();
+    if (!Data)
+        return false;
+    return Data->TestInt > 0;
 }

@@ -3,10 +3,9 @@
 
 #include "OGGameplayTriggerSubsystem.h"
 
-#include "OGAsyncUtils.h"
-
 FOGTriggerListenerData::FOGTriggerListenerData(const FGameplayTag& InTriggerType, EOGTriggerListenerPhases InListenerPhases,
-                                               const FOGTriggerDelegate& InCallback, const UObject* FilterInstigatorObject, const UObject* FilterTargetObject) :
+                                               const FOGTriggerDelegate& InCallback, const UObject* FilterInstigatorObject, const UObject* FilterTargetObject,
+                                               const TArray<UOGGameplayTriggerFilter*>& Filters) :
 	ListenerPhases(InListenerPhases),
 	InstigatorObject(FilterInstigatorObject),
 	TargetObject(FilterTargetObject),
@@ -15,30 +14,66 @@ FOGTriggerListenerData::FOGTriggerListenerData(const FGameplayTag& InTriggerType
 	TriggerType = InTriggerType;
 	bFilterOnInstigator = FilterInstigatorObject != nullptr;
 	bFilterOnTarget = FilterTargetObject != nullptr;
+
+	FilterObjects.Reserve(Filters.Num());
+	for (UOGGameplayTriggerFilter* Filter : Filters)
+	{
+		FilterObjects.Add(TStrongObjectPtr(Filter));
+	}
 }
 
-bool FOGTriggerListenerData::IsListenerValid() const
+FOGTriggerListenerData::~FOGTriggerListenerData()
+{
+	FilterObjects.Empty();
+}
+
+bool FOGTriggerListenerData::ShouldListenerProcessTrigger(EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, bool& bOutIsFilterStale) const
 {
 	if (!Callback.IsBound()) [[unlikely]]
+	{
+		bOutIsFilterStale = true;
 		return false;
-	if (bFilterOnInstigator && !InstigatorObject.IsValid()) [[unlikely]]
-		return false;
-	if (bFilterOnTarget && !TargetObject.IsValid()) [[unlikely]]
-		return false;
-	//TODO check validity of filters
-	return true;
-}
-
-bool FOGTriggerListenerData::ShouldListenerProcessTrigger(EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger) const
-{
+	}
+	
 	if (!(ListenerPhases & TriggerPhase))
 		return false;
-	if (bFilterOnInstigator && Trigger->InitiatorObject != InstigatorObject.Get())
-		return false;
-	if (bFilterOnTarget && Trigger->TargetObject != TargetObject.Get())
-		return false;
+	if (bFilterOnInstigator)
+	{
+		if (!InstigatorObject.IsValid()) [[unlikely]]
+		{
+			bOutIsFilterStale = true;
+			return false;
+		}
+		if (Trigger->InitiatorObject != InstigatorObject.Get())
+		{
+			return false;
+		}
+	}
+	if (bFilterOnTarget)
+	{
+		if (!TargetObject.IsValid()) [[unlikely]]
+		{
+			bOutIsFilterStale = true;
+            return false;
+		}
+		if (Trigger->TargetObject != TargetObject.Get())
+		{
+			return false;
+		}
+	}
 	
-	//TODO - check additional filters
+	for (const TStrongObjectPtr<UOGGameplayTriggerFilter>& FilterObject : FilterObjects)
+	{
+		if (!FilterObject.IsValid()) [[unlikely]]
+		{
+			bOutIsFilterStale = true;
+			return false;
+		}
+		if (!FilterObject->DoesTriggerPassFilter(TriggerPhase, Trigger, bOutIsFilterStale))
+		{
+			return false;
+		}
+	}
 	return true;
 }
 
@@ -93,13 +128,14 @@ UOGGameplayTriggerContext* UOGGameplayTriggerSubsystem::GetTriggerContextForUpda
 
 FOGTriggerListenerHandle UOGGameplayTriggerSubsystem::RegisterTriggerListener(const FGameplayTag& TriggerType, const EOGTriggerListenerPhases Phases,
                                                                               const FOGTriggerDelegate& Delegate, const UObject* FilterInstigator, const UObject* FilterTarget,
-                                                                              const bool bShouldFireForExistingTriggers, TOGFuture<void>* OutWhenListenerRemoved)
+                                                                              const bool bShouldFireForExistingTriggers, const TArray<UOGGameplayTriggerFilter*>& Filters,
+                                                                              TOGFuture<void>* OutWhenListenerRemoved)
 {
 	if (!ensure(Delegate.IsBound()))
 		return FOGHandleBase::EmptyHandle<FOGTriggerListenerHandle>();
 	ensureMsgf(!bShouldFireForExistingTriggers || !!(Phases & EOGTriggerListenerPhases::TriggerStart), TEXT("If using bShouldFireForExisitngTriggers, you must respond to TriggerStart"));
 
-	const TSharedRef<FOGTriggerListenerData> ListenerData = MakeShared<FOGTriggerListenerData>(TriggerType, Phases, Delegate, FilterInstigator, FilterTarget);
+	const TSharedRef<FOGTriggerListenerData> ListenerData = MakeShared<FOGTriggerListenerData>(TriggerType, Phases, Delegate, FilterInstigator, FilterTarget, Filters);
 	FOGTriggerListenerHandle Handle = CreateNewListenerHandle(TriggerType);
 	if (OutWhenListenerRemoved)
 	{
@@ -111,7 +147,8 @@ FOGTriggerListenerHandle UOGGameplayTriggerSubsystem::RegisterTriggerListener(co
 		TriggerMap& Triggers = ActiveTriggersByType.FindChecked(TriggerType);
 		for (auto& [TriggerHandle,Trigger] : Triggers)
 		{
-			if (ListenerData->ShouldListenerProcessTrigger(EOGTriggerListenerPhases::TriggerStart, Trigger.Get()))
+			bool bIsFilterStale = false;
+			if (ListenerData->ShouldListenerProcessTrigger(EOGTriggerListenerPhases::TriggerStart, Trigger.Get(), bIsFilterStale))
 			{
 				(void)Delegate.ExecuteIfBound(TriggerHandle, EOGTriggerListenerPhases::TriggerStart, Trigger.Get());
 			}
@@ -230,6 +267,17 @@ bool UOGGameplayTriggerSubsystem::IsListenerHandleValid(const FOGTriggerListener
 	return ListenerMap->Contains(Handle);
 }
 
+void UOGGameplayTriggerSubsystem::Deinitialize()
+{
+	Super::Deinitialize();
+	ReplicatedTriggers.Empty();
+	ActiveTriggersByType.Empty();
+	ListenersByType.Empty();
+	ListenersPendingAdd.Empty();
+	ListenersPendingRemove.Empty();
+	OperationQueue.Empty();
+}
+
 void UOGGameplayTriggerSubsystem::EnqueueAndProcessOperation(const FOGPendingTriggerOperation& Operation)
 {
 	const bool bShouldProcess = OperationQueue.IsEmpty();
@@ -237,7 +285,7 @@ void UOGGameplayTriggerSubsystem::EnqueueAndProcessOperation(const FOGPendingTri
 	if (!bShouldProcess)
 		return;
 	
-	FOGPendingTriggerOperation CurrentOperation;
+	FOGPendingTriggerOperation* CurrentOperation;
 	while (PeekOperation(CurrentOperation))
 	{
 		for (auto& [Handle,SharedListenerData] : ListenersPendingAdd)
@@ -252,7 +300,7 @@ void UOGGameplayTriggerSubsystem::EnqueueAndProcessOperation(const FOGPendingTri
         }
         ListenersPendingRemove.Empty();
         
-        ProcessTriggerOperation(CurrentOperation);
+        ProcessTriggerOperation(*CurrentOperation);
 		
 		PopOperation();
 	}
@@ -302,14 +350,12 @@ void UOGGameplayTriggerSubsystem::ProcessTriggerCallbacks(const FOGGameplayTrigg
 
 	for (auto& [Handle, Listener] : *Listeners)
 	{
-		if (Listener->IsListenerValid()) [[likely]]
+		bool bIsFilterStale = false;
+		if (Listener->ShouldListenerProcessTrigger(TriggerPhase, TriggerContext, bIsFilterStale))
 		{
-			if (Listener->ShouldListenerProcessTrigger(TriggerPhase, TriggerContext))
-			{
-				(void)Listener->Callback.ExecuteIfBound(TriggerHandle, TriggerPhase, TriggerContext);
-			}
+			(void)Listener->Callback.ExecuteIfBound(TriggerHandle, TriggerPhase, TriggerContext);
 		}
-		else
+		else if (bIsFilterStale)
 		{
 			//If the listener is no longer valid, remove it
 			ListenersPendingRemove.Add(Handle);
@@ -378,11 +424,11 @@ void UOGGameplayTriggerSubsystem::EnqueueOperation(const FOGPendingTriggerOperat
 	OperationQueue.AddHead(Operation);
 }
 
-bool UOGGameplayTriggerSubsystem::PeekOperation(FOGPendingTriggerOperation& OutOperation) const
+bool UOGGameplayTriggerSubsystem::PeekOperation(FOGPendingTriggerOperation*& OutOperation) const
 {
 	if (OperationQueue.IsEmpty())
 		return false;
-	OutOperation = OperationQueue.GetTail()->GetValue();
+	OutOperation = &OperationQueue.GetTail()->GetValue();
 	return true;
 }
 
