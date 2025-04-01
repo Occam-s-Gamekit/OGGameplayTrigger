@@ -149,9 +149,6 @@ private:
 	
 	//TODO: real system for replicated event types
 	static bool IsTriggerTypeReplicated(const FGameplayTag& TriggerType) { return false; }
-
-	//TODO: real system for filtering events
-	static bool DoesTriggerPassListenerFilters(EOGTriggerListenerPhases TriggerPhase, const UOGGameplayTriggerContext* Trigger, const FOGTriggerListenerData* Listener) {return true;}
 	
 	void AddActiveTrigger_Internal(const FOGGameplayTriggerHandle& Handle, UOGGameplayTriggerContext* Trigger);
 	void UpdateActiveTrigger_Internal(const FOGGameplayTriggerHandle& Handle, UOGGameplayTriggerContext* Trigger);
